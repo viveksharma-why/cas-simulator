@@ -1,0 +1,1298 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta charset="utf-8">
+<title>ConnectAndSell Desktop Agent Simulator</title>
+<style>
+  /* ======================================================================
+     The agent window is laid out on a fixed 1428 x 900 canvas (same geometry
+     as the real WinForms app) and scaled to fit the browser width.
+     ====================================================================== */
+  :root {
+    --yellow: #FFD700;
+    --green: #008000;
+    --red: #FF0000;
+    --gb-border: #DCDCDC;
+    --input-border: #7A7A7A;
+    --win-blue: #0078D7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: #DADDE2; }
+  body {
+    font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+    color: #000;
+    padding: 10px 0 20px;
+    overflow-x: hidden;
+  }
+  button { font: inherit; color: inherit; }
+
+  /* ---------------- Trainer / scenario strip (outside the agent app) ---------------- */
+  .trainer {
+    margin: 0 auto 8px;
+    background: #fff;
+    border: 1px solid #B0C4DE;
+    border-left: 6px solid #0055EA;
+    border-radius: 4px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.08);
+    padding: 8px 12px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+  .trainer { align-items: center; padding: 10px 14px; }
+  .trainer .call-no {
+    background: #0055EA; color: #fff; font-weight: 700; font-size: 16px;
+    padding: 6px 12px; border-radius: 3px; white-space: nowrap; text-align: center; line-height: 1.25;
+  }
+  .trainer .call-no small { display: block; font-size: 12px; font-weight: 400; opacity: .9; }
+  .trainer .event { flex: 1; font-size: 21px; line-height: 1.4; color: #111; font-weight: 500; }
+  .trainer .event b { color: #0044B3; font-weight: 700; }
+  .trainer .side { display: flex; align-items: center; gap: 10px; }
+  .cam-box { position: relative; width: 128px; height: 96px; background: #222; border: 1px solid #999; overflow: hidden; }
+  .cam-box video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .rec { position: absolute; left: 5px; top: 4px; color: #fff; font: 700 11px Arial; text-shadow: 0 0 2px #000; }
+  .rec::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #F33; margin-right: 4px; animation: blink 1.2s infinite; }
+  .rec.off::before { background: #888; animation: none; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .end-btn { background: #fff; border: 1px solid #C00000; color: #C00000; padding: 6px 10px; cursor: pointer; border-radius: 3px; font-size: 13px; }
+  .end-btn:hover { background: #FDECEC; }
+
+  /* ---------------- Sign-in / finish screens ---------------- */
+  .screen {
+    position: fixed; inset: 0; z-index: 5000; background: #DADDE2;
+    display: none; align-items: center; justify-content: center; padding: 20px; overflow: auto;
+  }
+  .screen.open { display: flex; }
+  .card {
+    background: #fff; border: 1px solid #B0C4DE; border-top: 6px solid #0055EA; border-radius: 4px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.15); width: 760px; max-width: 100%; padding: 22px 26px;
+  }
+  .card h1 { font-size: 22px; margin-bottom: 4px; }
+  .card .sub { color: #555; margin-bottom: 18px; }
+  .signin { display: flex; gap: 24px; }
+  .signin .fields { flex: 1; }
+  .signin label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  .signin input[type=text], .signin input[type=email], .signin select {
+    width: 100%; height: 34px; border: 1px solid #8A8A8A; padding: 0 8px; font: 15px "Segoe UI", Tahoma, Arial, sans-serif;
+  }
+  .signin .consent { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; font-size: 13px; color: #333; font-weight: 400; }
+  .signin .consent input { margin-top: 2px; flex-shrink: 0; }
+  .signin .cam-col { width: 260px; text-align: center; }
+  .signin .cam-big { width: 260px; height: 195px; background: #222; border: 1px solid #999; position: relative; overflow: hidden; }
+  .signin .cam-big video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .signin .cam-big .cam-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #ddd; padding: 14px; font-size: 13px; }
+  .primary {
+    background: #0055EA; color: #fff; border: 0; height: 38px; padding: 0 22px; font-size: 15px; font-weight: 600;
+    border-radius: 3px; cursor: pointer;
+  }
+  .primary:disabled { background: #9DB4DE; cursor: default; }
+  .secondary { background: #fff; border: 1px solid #8A8A8A; height: 32px; padding: 0 14px; border-radius: 3px; cursor: pointer; margin-top: 8px; }
+  .form-err { color: #C00000; margin-top: 12px; min-height: 18px; font-weight: 600; }
+  .result-big { font-size: 46px; font-weight: 700; margin: 8px 0; }
+  .kv { display: grid; grid-template-columns: 200px 1fr; gap: 6px 10px; font-size: 15px; margin: 14px 0; }
+  .kv div:nth-child(odd) { color: #555; }
+
+  .lock-msg { font-size: 15px; line-height: 1.5; }
+
+  /* ---------------- Agent window canvas ---------------- */
+  .stage { margin: 0 auto; position: relative; }
+  .app {
+    position: absolute; top: 0; left: 0;
+    width: 1428px; height: 900px;
+    transform-origin: 0 0;
+    background: #fff;
+    border: 1px solid #A0A0A0;
+    box-shadow: 0 4px 16px rgba(0,0,0,.25);
+    user-select: none;
+  }
+  .abs { position: absolute; }
+
+  /* WinForms GroupBox */
+  .gb { position: absolute; border: 1px solid var(--gb-border); border-radius: 3px; }
+  .gb > .lg {
+    position: absolute; top: -10px; left: 8px; padding: 0 3px;
+    background: #fff; color: #222; line-height: 18px;
+  }
+
+  /* Text boxes */
+  .tb {
+    position: absolute; height: 26px; padding: 0 4px;
+    border: 1px solid var(--input-border); background: #fff;
+    font: 15px "Segoe UI", Tahoma, Arial, sans-serif; color: #000;
+    outline: none;
+  }
+  .tb[readonly] { cursor: default; }
+  .tb.y { background: var(--yellow); border-color: #C9C9C9; font-size: 19px; height: 32px; }
+  .tb.y.sm { height: 28px; font-size: 17px; }
+  .tb.y.mid { height: 30px; font-size: 19px; }
+
+  .lbl { position: absolute; white-space: nowrap; }
+  .lbl.r { text-align: right; }
+  .muted { color: #6D6D6D; }
+
+  /* Native-looking radios / checkboxes */
+  input[type=radio], input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--win-blue); }
+  .chk { position: absolute; display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+
+  /* Status panel */
+  .badge { position: absolute; height: 22px; line-height: 22px; padding: 0 5px; color: #fff; overflow: hidden; white-space: nowrap; font-size: 15px; }
+  .badge.green { background: var(--green); }
+  .badge.red { background: var(--red); font-weight: 700; text-align: center; }
+  .state-bar {
+    position: absolute; left: 40px; top: 150px; width: 192px; height: 34px;
+    background: var(--green); color: #fff; font-weight: 700; font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .state-bar.paused { background: #FFD700; color: #000; }
+  .state-bar.ending { background: #D00000; }
+  .sqbtn {
+    position: absolute; width: 56px; height: 46px;
+    background: #EFEFEF; border: 1px solid #ADADAD;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .sqbtn:hover { background: #E5F1FB; border-color: var(--win-blue); }
+  .sqbtn.on { border: 2px solid var(--win-blue); }
+
+  /* Buttons (WinForms "Button") */
+  .wbtn {
+    position: absolute; height: 26px; background: #E1E1E1; border: 1px solid #ADADAD; cursor: pointer;
+  }
+  .wbtn:hover:not(:disabled) { background: #E5F1FB; border-color: var(--win-blue); }
+  .wbtn:disabled { color: #8D8D8D; cursor: default; }
+
+  /* Disposition list box */
+  .listbox {
+    position: absolute; left: 38px; top: 332px; width: 196px; height: 238px;
+    border: 1px solid #828790; font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+    outline: none; overflow-y: scroll;
+  }
+  .listbox option { padding: 0 2px; line-height: 16.5px; }
+  .listbox option:checked { background: #0078D7 linear-gradient(#0078D7,#0078D7); color: #fff; }
+
+  /* Big image buttons (Redial, Hang Up, Transfer, Voicemail) */
+  .imgbtn {
+    position: absolute; display: flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; cursor: pointer;
+  }
+  .imgbtn.boxed { background: #EFEFEF; border-color: #C8C8C8; }
+  .imgbtn:hover:not(.disabled) { background: #E5F1FB; border-color: #3399FF; }
+  .imgbtn.disabled { cursor: default; }
+  .imgbtn.disabled.boxed { background: #CCCCCC; border-color: #CCCCCC; }
+  .imgbtn.disabled svg { opacity: .55; filter: grayscale(1); }
+  .caption { position: absolute; text-align: center; line-height: 17px; font-size: 14px; }
+
+  .call-state {
+    position: absolute; left: 20px; top: 610px; width: 236px; text-align: center;
+    color: #3B4BFF; font-style: italic; font-size: 16px;
+  }
+  .call-state.alert { color: #C00000; font-weight: 600; font-style: normal; }
+
+  .redial-msg {
+    position: absolute; left: 0; right: 0; bottom: 4px; text-align: center;
+    font-size: 12px; font-weight: 700; color: #C00000; pointer-events: none;
+  }
+
+  /* Score */
+  .score-val { position: absolute; left: 0; right: 0; top: 26px; text-align: center; font-size: 15px; }
+
+  /* IVR play buttons */
+  .play {
+    position: absolute; width: 40px; height: 28px; background: #E9E9E9; border: 1px solid #ADADAD;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .play:hover { background: #E5F1FB; border-color: var(--win-blue); }
+
+  /* Special instructions */
+  .special { position: absolute; left: 12px; right: 12px; top: 14px; color: #C00000; font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Notes */
+  .notes-new {
+    position: absolute; left: 305px; top: 586px; width: 270px; height: 188px;
+    border: 2px solid #91C5EE; resize: none; padding: 4px; outline: none;
+    font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+  }
+  .notes-new:focus { border-color: var(--win-blue); }
+  .notes-old {
+    position: absolute; left: 595px; top: 586px; width: 340px; height: 306px;
+    background: #F0F0F0; border: 1px solid #C8C8C8; overflow-y: scroll;
+    padding: 4px 6px; font-size: 13px; line-height: 1.35; white-space: pre-wrap; user-select: text;
+  }
+
+  /* Script */
+  .script {
+    position: absolute; left: 985px; top: 592px; width: 412px; height: 298px;
+    border: 1px solid #A0A0A0; background: #fff; overflow-y: scroll;
+    padding: 4px 6px; font-size: 14px; line-height: 1.3; user-select: text;
+  }
+  .script p { margin-bottom: 14px; }
+  .script mark { background: #FFFF00; color: #000; }
+
+  /* Tooltip (like WinForms ToolTip) */
+  .tip {
+    position: fixed; z-index: 3000; display: none; pointer-events: none;
+    background: #fff; border: 1px solid #767676; padding: 3px 7px; font-size: 13px;
+    box-shadow: 2px 2px 3px rgba(0,0,0,.25);
+  }
+
+  /* Toast for agent feedback (replaces blocking alert()s) */
+  .toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 8px 16px; border-radius: 3px;
+    font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 4000;
+  }
+  .toast.show { opacity: .95; }
+
+  /* ---------------- Windows-style dialogs ---------------- */
+  .overlay {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: rgba(0,0,0,.35); align-items: center; justify-content: center;
+  }
+  .overlay.open { display: flex; }
+  .dlg {
+    background: #F0F0F0; border: 1px solid #6B6B6B; box-shadow: 0 6px 22px rgba(0,0,0,.4);
+    min-width: 360px; max-width: 560px; font-size: 13px;
+  }
+  .dlg-title {
+    background: #fff; padding: 7px 10px; font-size: 13px; border-bottom: 1px solid #E3E3E3;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .dlg-title .x { cursor: pointer; padding: 0 6px; color: #333; }
+  .dlg-body { background: #fff; padding: 16px; }
+  .dlg-foot { padding: 10px 12px; display: flex; justify-content: flex-end; gap: 8px; }
+  .dlg-foot button {
+    min-width: 80px; height: 26px; background: #E1E1E1; border: 1px solid #ADADAD; cursor: pointer;
+  }
+  .dlg-foot button.default { border: 2px solid var(--win-blue); }
+  .dlg-foot button:hover { background: #E5F1FB; border-color: var(--win-blue); }
+  .dlg label { display: block; margin: 8px 0 3px; }
+  .dlg select, .dlg textarea {
+    width: 100%; border: 1px solid var(--input-border); font: 13px "Segoe UI", Tahoma, Arial, sans-serif; padding: 3px;
+  }
+  .dlg textarea { height: 70px; resize: vertical; }
+  .msg-row { display: flex; gap: 14px; align-items: center; font-size: 14px; }
+
+  .banner { padding: 10px; color: #fff; font-weight: 700; font-size: 16px; text-align: center; margin-bottom: 10px; }
+  .banner.pass { background: #0F7B0F; }
+  .banner.fail { background: #C00000; }
+  .errs h4 { margin: 8px 0 4px; font-size: 13px; }
+  .errs ul { margin-left: 18px; }
+  .errs li { margin-bottom: 3px; }
+  .expect { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12.5px; }
+  .expect td { border: 1px solid #DDD; padding: 4px 6px; vertical-align: top; }
+  .expect td:first-child { background: #F5F5F5; width: 40%; }
+
+  .loading {
+    display: none; position: absolute; inset: 0; z-index: 50;
+    background: rgba(255,255,255,.75); align-items: center; justify-content: center;
+    font-size: 26px; color: #3B4BFF; font-style: italic;
+  }
+  .loading.open { display: flex; }
+</style>
+</head>
+<body>
+
+<!-- ======================= Trainer strip (not part of the real app) ======================= -->
+<div class="trainer" id="trainer">
+  <span class="call-no"><span id="call-no">Call 1</span><small id="call-of">of 10</small></span>
+  <div class="event" id="trigger"><b>Scenario Event:</b> Loading practice call…</div>
+  <div class="side">
+    <div class="cam-box" id="cam-small"><video id="cam-video-small" autoplay muted playsinline></video><span class="rec off" id="rec-dot">REC</span></div>
+    <button class="end-btn" onclick="confirmEnd()">End Simulation</button>
+  </div>
+</div>
+
+<!-- ======================= ConnectAndSell Desktop agent window ======================= -->
+<div class="stage" id="stage">
+<div class="app" id="app">
+
+  <!-- ---------- Status ---------- -->
+  <div class="gb" style="left:20px;top:12px;width:236px;height:236px">
+    <span class="lg">Status</span>
+  </div>
+  <span class="lbl" style="left:31px;top:30px">Phone:</span>
+  <span class="badge green" id="st-phone" style="left:88px;top:30px;width:62px">vjos12</span>
+  <span class="lbl" style="left:30px;top:66px">Campaign:</span>
+  <span class="badge green" id="st-campaign" style="left:108px;top:66px;width:147px">Training :: Demo</span>
+  <span class="lbl" style="left:31px;top:104px">Pitchers:</span>
+  <span class="badge red" id="st-pitchers" style="left:98px;top:104px;width:136px;text-align:center;font-weight:700">0</span>
+
+  <div class="state-bar" id="state-bar">Running</div>
+
+  <button class="sqbtn on" id="btn-run" style="left:42px;top:193px" data-tip="Start Dialing" onclick="setAgentState('Running')">
+    <svg width="26" height="26" viewBox="0 0 26 26"><path d="M5 3 L22 13 L5 23 Z" fill="#9F9F9F"/></svg>
+  </button>
+  <button class="sqbtn" id="btn-pause" style="left:108px;top:193px" data-tip="Pause After This Call" onclick="setAgentState('Paused')">
+    <svg width="28" height="24" viewBox="0 0 28 24"><defs><radialGradient id="yg" cx=".4" cy=".35" r=".7"><stop offset="0" stop-color="#FFF59A"/><stop offset=".55" stop-color="#FFD000"/><stop offset="1" stop-color="#C79A00"/></radialGradient></defs><ellipse cx="14" cy="12" rx="12" ry="10" fill="url(#yg)" stroke="#A88300" stroke-width=".8"/></svg>
+  </button>
+  <button class="sqbtn" id="btn-end" style="left:175px;top:193px" data-tip="End Session" onclick="setAgentState('Ending')">
+    <svg width="28" height="28" viewBox="0 0 28 28"><rect x="1" y="1" width="26" height="26" rx="3" fill="#DC5A3C" stroke="#A33" /><circle cx="14" cy="15" r="7" fill="none" stroke="#fff" stroke-width="2.2"/><line x1="14" y1="6" x2="14" y2="14" stroke="#DC5A3C" stroke-width="5"/><line x1="14" y1="6.5" x2="14" y2="13.5" stroke="#fff" stroke-width="2.2"/></svg>
+  </button>
+  <span class="lbl muted" style="left:20px;width:236px;text-align:center;top:255px">+1(323)613-7142</span>
+
+  <!-- ---------- Disposition ---------- -->
+  <div class="gb" style="left:20px;top:318px;width:236px;height:288px">
+    <span class="lg">Disposition</span>
+  </div>
+  <select class="listbox" id="disp" size="14"></select>
+  <button class="wbtn" id="btn-submit" style="left:85px;top:574px;width:104px" onclick="onSubmitDisposition()">Submit</button>
+
+  <!-- ---------- Call state / Redial / Hang Up ---------- -->
+  <div class="call-state" id="call-state">Connected</div>
+
+  <div class="imgbtn boxed disabled" id="btn-redial" style="left:85px;top:640px;width:105px;height:76px" onclick="onRedial()" data-tip="Redial">
+    <svg width="56" height="46" viewBox="0 0 56 46"><g fill="#fff" stroke="#8A8A8A" stroke-width="1.5"><path d="M10 26 L36 18 L46 34 L20 42 Z"/><path d="M8 14 Q24 2 42 10 L40 18 Q28 12 14 20 Z"/><rect x="22" y="22" width="14" height="10" transform="rotate(-17 29 27)"/></g><g fill="#8A8A8A"><circle cx="26" cy="28" r="1.3"/><circle cx="30" cy="27" r="1.3"/><circle cx="34" cy="26" r="1.3"/></g></svg>
+    <div class="redial-msg" id="redial-msg"></div>
+  </div>
+  <div class="caption" style="left:85px;top:720px;width:105px">Redial<br>(F11)</div>
+
+  <div class="imgbtn" id="btn-hangup" style="left:85px;top:788px;width:105px;height:42px" onclick="onHangUp()" data-tip="Hangs Up Phone">
+    <svg width="46" height="34" viewBox="0 0 46 34"><g stroke="#555" stroke-width="1.2"><path d="M6 20 L30 12 L40 26 L16 33 Z" fill="#E8E8E8"/><path d="M4 9 Q20 -1 37 6 L35 13 Q24 8 11 15 Z" fill="#9A9A9A"/></g><g fill="#3B9A3B"><rect x="19" y="20" width="3" height="3"/><rect x="24" y="19" width="3" height="3"/><rect x="29" y="18" width="3" height="3"/></g><path d="M14 4 L28 18 M28 4 L14 18" stroke="#E01010" stroke-width="3" stroke-linecap="round"/></svg>
+  </div>
+  <div class="caption" style="left:85px;top:834px;width:105px">Hang Up<br>(F12)</div>
+
+  <!-- ---------- Contact ---------- -->
+  <div class="gb" style="left:285px;top:12px;width:668px;height:246px">
+    <span class="lg">Contact</span>
+  </div>
+  <span class="lbl" style="left:326px;top:46px">Name:</span>
+  <input class="tb y" id="c-sal"   style="left:388px;top:40px;width:52px" readonly>
+  <input class="tb y" id="c-first" style="left:450px;top:40px;width:203px" readonly>
+  <input class="tb y" id="c-last"  style="left:663px;top:40px;width:270px" readonly>
+
+  <span class="lbl" style="left:309px;top:85px">Job Title:</span>
+  <input class="tb y mid" id="c-title" style="left:388px;top:80px;width:545px" readonly>
+
+  <span class="lbl" style="left:331px;top:122px">State:</span>
+  <input class="tb y" id="c-state" style="left:388px;top:116px;width:150px" readonly>
+  <span class="lbl" style="left:590px;top:122px">Country:</span>
+  <input class="tb y mid" id="c-country" style="left:665px;top:116px;width:268px" readonly>
+
+  <span class="lbl" style="left:346px;top:157px">Tel1:</span>
+  <input class="tb" id="c-tel1" style="left:400px;top:154px;width:150px" readonly>
+  <input class="tb" id="c-ext1" style="left:560px;top:154px;width:68px" readonly>
+  <input type="radio" name="c-tel" class="abs" style="left:638px;top:159px">
+  <label class="chk muted" style="left:664px;top:157px"><input type="checkbox" id="chk-graceful">Graceful Exit</label>
+
+  <span class="lbl" style="left:346px;top:188px">Tel2:</span>
+  <input class="tb" id="c-tel2" style="left:400px;top:185px;width:150px" readonly>
+  <input class="tb" id="c-ext2" style="left:560px;top:185px;width:68px" readonly>
+  <input type="radio" name="c-tel" class="abs" style="left:638px;top:190px" checked>
+  <label class="chk" style="left:664px;top:189px"><input type="checkbox" id="chk-direct">Direct Call</label>
+  <span class="lbl" style="left:828px;top:189px">Priority:</span>
+  <input class="tb" id="c-priority" style="left:893px;top:187px;width:40px;height:24px;background:#F0F0F0;color:#6D6D6D" value="7" readonly>
+
+  <span class="lbl" style="left:346px;top:219px">Tel3:</span>
+  <input class="tb" id="c-tel3" style="left:400px;top:216px;width:150px" readonly>
+  <input class="tb" id="c-ext3" style="left:560px;top:216px;width:68px" readonly>
+  <input type="radio" name="c-tel" class="abs" style="left:638px;top:221px">
+
+  <!-- ---------- Company ---------- -->
+  <div class="gb" style="left:985px;top:12px;width:440px;height:208px">
+    <span class="lg">Company</span>
+  </div>
+  <span class="lbl" style="left:1018px;top:49px">Name:</span>
+  <input class="tb y mid" id="co-name" style="left:1078px;top:43px;width:322px" readonly>
+  <span class="lbl" style="left:1031px;top:87px">URL:</span>
+  <input class="tb" id="co-url" style="left:1078px;top:84px;width:226px;height:24px;background:#F0F0F0" readonly>
+  <a href="#" class="lbl" id="co-visit" style="left:1333px;top:86px;color:#0645AD;text-decoration:underline">Visit</a>
+  <span class="lbl" style="left:1025px;top:122px">State:</span>
+  <input class="tb y sm" id="co-state" style="left:1078px;top:118px;width:82px" readonly>
+  <span class="lbl" style="left:1166px;top:122px">Country:</span>
+  <input class="tb y sm" id="co-country" style="left:1238px;top:118px;width:162px" readonly>
+  <span class="lbl" style="left:1031px;top:155px">Tel1:</span>
+  <input class="tb" id="co-tel1" style="left:1078px;top:152px;width:152px;height:24px" readonly>
+  <input class="tb" style="left:1238px;top:152px;width:66px;height:24px" readonly>
+  <input type="radio" name="co-tel" class="abs" style="left:1314px;top:156px">
+  <span class="lbl" style="left:1031px;top:185px">Tel2:</span>
+  <input class="tb" id="co-tel2" style="left:1078px;top:182px;width:152px;height:24px" readonly>
+  <input class="tb" style="left:1238px;top:182px;width:66px;height:24px" readonly>
+  <input type="radio" name="co-tel" class="abs" style="left:1314px;top:186px">
+
+  <!-- ---------- Voicemail buttons ---------- -->
+  <div class="imgbtn boxed" id="btn-vm-any" style="left:1005px;top:248px;width:120px;height:94px" onclick="onLeaveVm('Any voicemail Box')" data-tip="Leave Voicemail">
+    <svg width="64" height="56" viewBox="0 0 64 56" class="vm-ico"><g stroke="#7A7A7A" stroke-width="1.4" fill="#D6D6D6"><path d="M8 32 L40 22 L54 42 L22 52 Z"/><path d="M6 18 Q26 3 50 13 L47 22 Q32 15 14 25 Z" fill="#B9B9B9"/></g><rect x="24" y="30" width="18" height="11" fill="#9E9E9E" transform="rotate(-17 33 35)"/><circle cx="29" cy="36" r="2.4" fill="#eee"/><circle cx="37" cy="33.6" r="2.4" fill="#eee"/></svg>
+  </div>
+  <div class="caption" style="left:990px;top:352px;width:150px">Leave Voicemail<br>(Any voicemail<br>Box)<br>(F10)</div>
+
+  <div class="imgbtn boxed" id="btn-vm-prospect" style="left:1142px;top:248px;width:120px;height:94px" onclick="onLeaveVm('Prospect Voicemail only')" data-tip="Leave Voicemail (Prospect only)">
+    <svg width="64" height="56" viewBox="0 0 64 56"><g stroke="#7A7A7A" stroke-width="1.4" fill="#D6D6D6"><path d="M8 32 L40 22 L54 42 L22 52 Z"/><path d="M6 18 Q26 3 50 13 L47 22 Q32 15 14 25 Z" fill="#B9B9B9"/></g><rect x="24" y="30" width="18" height="11" fill="#9E9E9E" transform="rotate(-17 33 35)"/><circle cx="29" cy="36" r="2.4" fill="#eee"/><circle cx="37" cy="33.6" r="2.4" fill="#eee"/></svg>
+  </div>
+  <div class="caption" style="left:1127px;top:352px;width:150px">Leave Voicemail<br>(Prospect<br>Voicemail only)<br>(F10)</div>
+
+  <!-- ---------- Call Report ---------- -->
+  <div class="gb" style="left:293px;top:276px;width:670px;height:46px">
+    <span class="lg">Call Report</span>
+  </div>
+  <label class="chk" style="left:308px;top:290px"><input type="checkbox" name="call-rep" value="Person Answered">Person Answered</label>
+  <label class="chk" style="left:469px;top:290px"><input type="checkbox" name="call-rep" value="IVR Answered">IVR Answered</label>
+  <label class="chk" style="left:612px;top:290px"><input type="checkbox" name="call-rep" value="Fax Answered">Fax Answered</label>
+  <label class="chk" style="left:752px;top:290px"><input type="checkbox" name="call-rep" value="IVR Success">IVR Success</label>
+
+  <!-- ---------- Your Score ---------- -->
+  <div class="gb" style="left:298px;top:372px;width:122px;height:90px">
+    <span class="lg">Your Score</span>
+    <div class="score-val" id="score">0</div>
+  </div>
+
+  <!-- ---------- IVR Path ---------- -->
+  <div class="gb" style="left:485px;top:336px;width:286px;height:136px">
+    <span class="lg">IVR Path</span>
+  </div>
+  <input class="tb" id="ivr1" style="left:500px;top:358px;width:73px;height:28px">
+  <input class="tb" id="ivr2" style="left:591px;top:358px;width:73px;height:28px">
+  <input class="tb" id="ivr3" style="left:682px;top:358px;width:73px;height:28px">
+  <button class="play" style="left:500px;top:397px" onclick="playIvr(1)"><svg width="20" height="18" viewBox="0 0 20 18"><path d="M3 2 L17 9 L3 16 Z" fill="#22B14C" stroke="#0B5E22"/></svg></button>
+  <button class="play" style="left:591px;top:397px" onclick="playIvr(2)"><svg width="20" height="18" viewBox="0 0 20 18"><path d="M3 2 L17 9 L3 16 Z" fill="#22B14C" stroke="#0B5E22"/></svg></button>
+  <button class="play" style="left:682px;top:397px" onclick="playIvr(3)"><svg width="20" height="18" viewBox="0 0 20 18"><path d="M3 2 L17 9 L3 16 Z" fill="#22B14C" stroke="#0B5E22"/></svg></button>
+  <input class="tb" id="ivr-path" style="left:500px;top:436px;width:257px" readonly>
+
+  <!-- ---------- Transfer ---------- -->
+  <div class="imgbtn boxed" id="btn-transfer" style="left:850px;top:330px;width:118px;height:94px" onclick="onTransfer()" data-tip="Transfer to Pitcher">
+    <svg id="ico-x" width="44" height="44" viewBox="0 0 44 44"><path d="M8 12 L12 8 L22 18 L32 8 L36 12 L26 22 L36 32 L32 36 L22 26 L12 36 L8 32 L18 22 Z" fill="#8C8C8C" stroke="#777"/></svg>
+    <svg id="ico-xfer" width="56" height="48" viewBox="0 0 56 48" style="display:none"><g stroke="#2E7D32" stroke-width="1.4"><path d="M6 26 L30 18 L40 34 L16 42 Z" fill="#C8E6C9"/><path d="M4 13 Q20 2 38 9 L36 17 Q24 11 11 19 Z" fill="#66BB6A"/></g><path d="M34 6 H48 M42 1 L49 6 L42 11" stroke="#1B5E20" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </div>
+  <div class="caption" style="left:830px;top:430px;width:158px">Transfer<br>(F1)</div>
+
+  <!-- ---------- Special Instructions ---------- -->
+  <div class="gb" style="left:285px;top:488px;width:1140px;height:56px">
+    <span class="lg">Special Instructions</span>
+    <div class="special" id="special"></div>
+  </div>
+
+  <!-- ---------- Notes ---------- -->
+  <div class="gb" style="left:285px;top:568px;width:668px;height:328px">
+    <span class="lg">Notes</span>
+  </div>
+  <textarea class="notes-new" id="notes-new" spellcheck="false"></textarea>
+  <button class="wbtn" style="left:388px;top:785px;width:102px;height:24px" onclick="commitNote()">Enter</button>
+  <span class="lbl" style="left:300px;top:836px">LeadID:</span>
+  <input class="tb" id="lead-id" style="left:368px;top:832px;width:145px" readonly>
+  <div class="notes-old" id="notes-old"></div>
+
+  <!-- ---------- Script ---------- -->
+  <div class="gb" style="left:975px;top:574px;width:450px;height:322px">
+    <span class="lg">Script</span>
+  </div>
+  <div class="script" id="script"></div>
+
+  <div class="loading" id="loading">Dialing…</div>
+</div>
+</div>
+
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+
+<!-- ======================= Dialer pop-up (Bad Number / No Answer / Busy …) ======================= -->
+<div class="overlay" id="dlg-popup">
+  <div class="dlg">
+    <div class="dlg-title"><span>ConnectAndSell Desktop</span><span class="x" onclick="closePopup()">✕</span></div>
+    <div class="dlg-body">
+      <div class="msg-row">
+        <svg width="32" height="32" viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="#1E6FD9"/><rect x="14.3" y="13" width="3.4" height="11" fill="#fff"/><circle cx="16" cy="9" r="2" fill="#fff"/></svg>
+        <span id="popup-text"></span>
+      </div>
+    </div>
+    <div class="dlg-foot"><button class="default" id="popup-ok" onclick="closePopup()">OK</button></div>
+  </div>
+</div>
+
+<!-- ======================= Call Alert (DNC / Gk Block Rem) ======================= -->
+<div class="overlay" id="dlg-alert">
+  <div class="dlg" style="width:460px">
+    <div class="dlg-title"><span>Call Alert</span><span class="x" onclick="closeCallAlert(false)">✕</span></div>
+    <div class="dlg-body">
+      <div style="color:#C00000;font-weight:600">Disposition: <span id="alert-disp"></span></div>
+      <label for="alert-reason">Reason</label>
+      <select id="alert-reason"></select>
+      <label for="alert-notes">Comments</label>
+      <textarea id="alert-notes"></textarea>
+    </div>
+    <div class="dlg-foot">
+      <button onclick="closeCallAlert(false)">Skip Alert</button>
+      <button class="default" onclick="closeCallAlert(true)">Submit Alert</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Scorecard ======================= -->
+<div class="overlay" id="dlg-score">
+  <div class="dlg" style="width:540px">
+    <div class="dlg-title"><span>Practice Call Debrief</span></div>
+    <div class="dlg-body">
+      <div class="banner" id="score-banner"></div>
+      <div class="errs" id="score-errs"></div>
+      <table class="expect" id="score-expect"></table>
+    </div>
+    <div class="dlg-foot">
+      <button class="default" id="btn-next" onclick="loadCurrentCall()">Next Call</button>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Sign-in screen ======================= -->
+<div class="screen open" id="scr-signin">
+  <div class="card">
+    <h1>ConnectAndSell Agent Simulator</h1>
+    <div class="sub" id="signin-sub">Enter your details to start the simulation.</div>
+    <div class="signin" id="signin-body">
+      <div class="fields">
+        <label for="in-name">Full name</label>
+        <input type="text" id="in-name" autocomplete="name" maxlength="80">
+        <label for="in-email">Work email</label>
+        <input type="email" id="in-email" autocomplete="email" maxlength="120">
+        <div id="fac-wrap" style="display:none">
+          <label for="in-facility">Facility</label>
+          <select id="in-facility"></select>
+        </div>
+        <label class="consent" id="consent-wrap">
+          <input type="checkbox" id="in-consent">
+          <span id="consent-text">I confirm I am the agent taking this simulation. I understand my webcam will be recorded during every call, and the recording and my results will be shared with my QA Manager and Facility Manager.</span>
+        </label>
+        <div class="form-err" id="signin-err"></div>
+        <button class="primary" id="btn-start" onclick="onStart()">Start Simulation</button>
+      </div>
+      <div class="cam-col" id="cam-col">
+        <div class="cam-big"><video id="cam-video-big" autoplay muted playsinline></video><div class="cam-msg" id="cam-msg">Camera is off</div></div>
+        <button class="secondary" id="btn-cam" onclick="enableCamera()">Turn on camera</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= Finished screen ======================= -->
+<div class="screen" id="scr-done">
+  <div class="card" style="text-align:center">
+    <h1>Simulation complete</h1>
+    <div class="result-big" id="done-result"></div>
+    <div class="kv" id="done-kv" style="text-align:left;max-width:460px;margin:14px auto"></div>
+    <div class="sub">Your results and recordings have been sent to your QA Manager and Facility Manager. You can close this window.</div>
+  </div>
+</div>
+
+<!-- ======================= Camera lost lock ======================= -->
+<div class="overlay" id="dlg-cam" style="z-index:4500">
+  <div class="dlg" style="width:420px">
+    <div class="dlg-title"><span>Camera required</span></div>
+    <div class="dlg-body lock-msg">Your webcam stopped. The simulation is paused until the camera is back on. This has been logged.</div>
+    <div class="dlg-foot"><button class="default" onclick="enableCamera(true)">Turn camera back on</button></div>
+  </div>
+</div>
+
+<!-- ======================= Confirm end ======================= -->
+<div class="overlay" id="dlg-end">
+  <div class="dlg" style="width:420px">
+    <div class="dlg-title"><span>End simulation?</span></div>
+    <div class="dlg-body lock-msg">Calls you haven't taken will count as not completed, and the report will be sent to your managers now.</div>
+    <div class="dlg-foot"><button onclick="closeOverlay('dlg-end')">Keep going</button><button class="default" onclick="endNow()">End simulation</button></div>
+  </div>
+</div>
+
+<script>
+/* =====================================================================
+   Configuration
+   ===================================================================== */
+// Leave blank when running as the Apps Script web app.
+// If you host this page elsewhere (e.g. GitHub Pages, needed when the browser blocks the camera
+// inside Apps Script), paste your Apps Script web app URL ending in /exec here.
+const API_URL = 'https://script.google.com/macros/s/AKfycbzKtfKIpHm95SUmI9D0ITesYJGZ4QlnIVsTC2aAMvKfW1c61fvhcvx4GP9dfCdvTtzIdA/exec';
+
+const AGENT_NAME = 'Sean';
+const AGENT_HANDLE = 'vjos12';
+const VIDEO_BITRATE = 250000;            // ~1.9 MB per minute of recording
+const MAX_CLIP_BYTES = 35 * 1024 * 1024; // clips larger than this are not uploaded
+
+// value = what's stored in the Scenarios sheet; label = what the real app shows.
+const DISPOSITIONS = [
+  ['Bad Number', 'Bad Number'],
+  ['Direct Number', 'Direct Number'],
+  ['Fax Tone', 'Fax Tone'],
+  ['Gk Block Rem', 'Gatekeeper Block - Rem'],
+  ['Incomplete Record', 'Incomplete Record'],
+  ['No Answer', 'No Answer'],
+  ['Not Available', 'Not Available'],
+  ['Personleft Rem', 'Personleft- Rem'],
+  ['Pitcher Busy', 'Pitcher Busy'],
+  ['Research Error', 'Research Error.'],
+  ['Target in Different Location', 'Target in Different Location'],
+  ['Voicemail Dropped Active', 'VM Dropped-Active'],
+  ['Voicemail', 'Voicemail'],
+  ['Wrong Number Remove', 'Wrong Number-Rem'],
+  ['Do Not Call', 'Do Not Call']
+];
+const CALL_ALERT_DISPOSITIONS = new Set(['Do Not Call', 'Gk Block Rem']);
+
+/* =====================================================================
+   State
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+const S = {
+  config: null,
+  session: null,         // {sessionId, total, showAnswers, requireVideo, ...}
+  scenario: null,
+  index: 0,
+  total: 0,
+  alertReasons: [],
+  calls: 0,
+  scoreSum: 0,
+  busy: false,
+  events: [],            // proctoring events sent with the next submission
+  attempt: null,
+  lastDone: null
+};
+
+function resetAttempt() {
+  S.attempt = {
+    hotkeys: [], transferred: false, notes: [],
+    callAlertSubmitted: false, callAlertReason: '', callAlertNotes: ''
+  };
+}
+
+/* =====================================================================
+   Boot
+   ===================================================================== */
+document.addEventListener('DOMContentLoaded', async () => {
+  $('disp').innerHTML = DISPOSITIONS
+    .map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+  $('disp').addEventListener('dblclick', onSubmitDisposition);
+  $('co-visit').addEventListener('click', e => e.preventDefault());
+
+  fitToWindow();
+  window.addEventListener('resize', fitToWindow);
+  document.addEventListener('keydown', onKey);
+  document.addEventListener('visibilitychange', () => {
+    if (S.session && S.scenario) noteEvent(document.hidden ? 'Left the simulator window' : 'Returned to the simulator window');
+  });
+  setupTooltips();
+
+  $('btn-start').disabled = true;
+  try {
+    S.config = await server('getStartConfig');
+    const c = S.config;
+    // Inside Apps Script the camera is blocked by Google – send agents to the hosted copy.
+    if (insideAppsScript() && c.requireVideo && /^https:\/\//.test(c.hostedUrl || '')) {
+      $('signin-sub').textContent = 'Webcam recording is required for this simulation.';
+      $('signin-body').style.display = 'block';
+      $('signin-body').innerHTML =
+        '<p style="font-size:15px;margin-bottom:16px">The simulator records your webcam, which Google blocks on this page. ' +
+        'Click below to open the camera-enabled simulator.</p>' +
+        `<a class="primary" style="display:inline-flex;align-items:center;text-decoration:none" target="_top" href="${esc(c.hostedUrl)}">Open Simulator</a>`;
+      return;
+    }
+    if (c.facilities && c.facilities.length) {
+      $('in-facility').innerHTML = '<option value="">Select your facility…</option>' +
+        c.facilities.map(f => `<option>${esc(f)}</option>`).join('');
+      $('fac-wrap').style.display = '';
+    }
+    $('signin-sub').textContent = `You will take ${c.questionsPerSession} practice calls. ` +
+      (c.allowedDomain ? `Use your @${c.allowedDomain.replace(/^@/, '')} email.` : '');
+    if (!c.requireVideo) {
+      $('consent-text').textContent = 'I confirm I am the agent taking this simulation. My results will be shared with my QA Manager and Facility Manager.';
+    }
+  } catch (err) {
+    $('signin-err').textContent = 'Could not reach the simulator: ' + err.message;
+  }
+  $('btn-start').disabled = false;
+});
+
+function fitToWindow() {
+  const W = 1428, H = 900;
+  const s = Math.min(1.1, (document.documentElement.clientWidth - 24) / W);
+  $('app').style.transform = `scale(${s})`;
+  $('stage').style.width = (W * s) + 'px';
+  $('stage').style.height = (H * s) + 'px';
+  $('trainer').style.width = (W * s) + 'px';
+}
+
+/* =====================================================================
+   Server transport: google.script.run inside Apps Script, fetch() elsewhere
+   ===================================================================== */
+function insideAppsScript() { return !!(window.google && google.script && google.script.run); }
+
+function server(fn, arg) {
+  if (insideAppsScript()) {
+    return new Promise((resolve, reject) => {
+      google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](arg);
+    });
+  }
+  if (!API_URL) return Promise.reject(new Error('API_URL is not set in index.html'));
+  return fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids a CORS pre-flight
+    body: JSON.stringify({ fn, arg })
+  }).then(r => r.json()).then(o => {
+    if (!o.ok) throw new Error(o.error);
+    return o.result;
+  });
+}
+
+/* =====================================================================
+   Webcam: live preview + one recording per call
+   ===================================================================== */
+const Cam = { stream: null, rec: null, chunks: [], mime: '' };
+
+async function enableCamera(fromLock) {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } },
+      audio: false
+    });
+    Cam.stream = stream;
+    $('cam-video-big').srcObject = stream;
+    $('cam-video-small').srcObject = stream;
+    $('cam-msg').style.display = 'none';
+    $('btn-cam').style.display = 'none';
+    $('signin-err').textContent = '';
+    stream.getVideoTracks()[0].addEventListener('ended', onCameraLost);
+    if (fromLock) {
+      closeOverlay('dlg-cam');
+      noteEvent('Camera turned back on');
+      if (S.scenario) startClip();
+    }
+  } catch (err) {
+    const blocked = /not allowed in this document|permissions policy/i.test(err.message) ||
+      (err.name === 'NotAllowedError' && insideAppsScript());
+    const msg = err.name === 'NotFoundError' ? 'No camera was found on this computer.'
+      : blocked ? 'Google blocks the webcam inside Apps Script pages. Your admin needs to set up the camera-enabled link (HostedPageUrl in the Settings tab).'
+      : 'Camera access was denied. Click the camera icon in the address bar, choose Allow, and try again.';
+    if (fromLock) toast(msg, 6000);
+    else { $('cam-msg').textContent = msg; $('signin-err').textContent = msg; }
+  }
+}
+
+function onCameraLost() {
+  if (!S.session) return;
+  noteEvent('Camera stopped during call ' + S.index);
+  setRecDot(false);
+  Cam.stream = null;
+  if (S.session.requireVideo) openOverlay('dlg-cam');
+}
+
+function pickMime() {
+  if (!window.MediaRecorder) return '';
+  return ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+function startClip() {
+  if (!Cam.stream || !window.MediaRecorder) return;
+  try {
+    Cam.mime = pickMime();
+    Cam.chunks = [];
+    Cam.rec = new MediaRecorder(Cam.stream, { mimeType: Cam.mime || undefined, videoBitsPerSecond: VIDEO_BITRATE });
+    Cam.rec.ondataavailable = e => { if (e.data && e.data.size) Cam.chunks.push(e.data); };
+    Cam.rec.start(2000);
+    setRecDot(true);
+  } catch (err) {
+    noteEvent('Recording could not start: ' + err.message);
+  }
+}
+
+function stopClip() {
+  const rec = Cam.rec;
+  Cam.rec = null;
+  setRecDot(false);
+  if (!rec || rec.state === 'inactive') {
+    return Promise.resolve(Cam.chunks.length ? new Blob(Cam.chunks, { type: Cam.mime || 'video/webm' }) : null);
+  }
+  return new Promise(resolve => {
+    rec.onstop = () => resolve(Cam.chunks.length ? new Blob(Cam.chunks, { type: rec.mimeType || 'video/webm' }) : null);
+    rec.stop();
+  });
+}
+
+function discardClip() {
+  if (Cam.rec && Cam.rec.state !== 'inactive') { Cam.rec.ondataavailable = null; Cam.rec.stop(); }
+  Cam.rec = null; Cam.chunks = []; setRecDot(false);
+}
+
+async function uploadCurrentClip() {
+  const blob = await stopClip();
+  if (!blob) return '';
+  if (blob.size > MAX_CLIP_BYTES) { noteEvent(`Call ${S.index} recording too large to upload`); return 'TOO LARGE'; }
+  try {
+    const data = await blobToBase64(blob);
+    const res = await server('uploadClip', { sessionId: S.session.sessionId, mime: blob.type, data });
+    return res.url;
+  } catch (err) {
+    noteEvent(`Call ${S.index} recording upload failed: ${err.message}`);
+    return 'UPLOAD FAILED';
+  }
+}
+
+function snapshot() {
+  const v = $('cam-video-big');
+  if (!Cam.stream || !v.videoWidth) return '';
+  const c = document.createElement('canvas');
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext('2d').drawImage(v, 0, 0);
+  return c.toDataURL('image/jpeg', 0.8);
+}
+
+function stopCamera() {
+  discardClip();
+  if (Cam.stream) Cam.stream.getTracks().forEach(t => { t.removeEventListener('ended', onCameraLost); t.stop(); });
+  Cam.stream = null;
+}
+
+function setRecDot(on) { $('rec-dot').classList.toggle('off', !on); }
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+function noteEvent(text) { S.events.push(text); }
+
+/* =====================================================================
+   Sign-in → session → calls
+   ===================================================================== */
+async function onStart() {
+  const err = $('signin-err');
+  const name = $('in-name').value.trim();
+  const email = $('in-email').value.trim();
+  const facility = $('in-facility').value;
+  const c = S.config || {};
+
+  if (name.length < 3 || !/\s/.test(name)) return err.textContent = 'Please enter your first and last name.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return err.textContent = 'Please enter a valid email address.';
+  if (c.facilities && c.facilities.length && !facility) return err.textContent = 'Please select your facility.';
+  if (c.requireVideo && !Cam.stream) return err.textContent = 'Please turn on your camera first.';
+  if (!$('in-consent').checked) return err.textContent = 'Please tick the confirmation box.';
+
+  err.textContent = '';
+  $('btn-start').disabled = true;
+  $('btn-start').textContent = 'Starting…';
+  try {
+    S.session = await server('startSession', {
+      name, email, facility, photo: snapshot(), hasVideo: !!Cam.stream
+    });
+    S.total = S.session.total;
+    closeScreen('scr-signin');
+    if (S.session.resumed) toast(`Welcome back, ${S.session.name}. Resuming at call ${S.session.answered + 1}.`, 4000);
+    await loadCurrentCall();
+  } catch (e) {
+    err.textContent = e.message;
+  } finally {
+    $('btn-start').disabled = false;
+    $('btn-start').textContent = 'Start Simulation';
+  }
+}
+
+async function loadCurrentCall() {
+  if (S.lastDone) return showDone(S.lastDone);
+  S.busy = true;
+  closeOverlay('dlg-score');
+  $('loading').textContent = 'Dialing…';
+  $('loading').classList.add('open');
+  try {
+    const res = await server('getCurrentCall', S.session.sessionId);
+    if (res.done) return showDone(null);
+    S.alertReasons = res.alertReasons || [];
+    S.index = res.index;
+    S.total = res.total;
+    populate(res.scenario);
+    startClip();
+  } catch (err) {
+    toast(err.message, 6000);
+  } finally {
+    S.busy = false;
+    $('loading').classList.remove('open');
+  }
+}
+
+/* =====================================================================
+   Render a scenario
+   ===================================================================== */
+function populate(scn) {
+  S.scenario = scn;
+  resetAttempt();
+  const c = scn.contact, co = scn.company;
+
+  $('call-no').textContent = 'Call ' + S.index;
+  $('call-of').textContent = 'of ' + S.total;
+  $('trigger').innerHTML = '<b>Scenario Event:</b> ' + esc(scn.description);
+
+  $('st-phone').textContent = AGENT_HANDLE;
+  $('st-campaign').textContent = 'Training :: ' + (co.name || 'Demo');
+  const pitchers = scn.pitcher.busy ? 0 : 1;
+  $('st-pitchers').textContent = pitchers;
+  $('st-pitchers').className = 'badge ' + (pitchers ? 'green' : 'red');
+  $('ico-x').style.display = pitchers ? 'none' : '';
+  $('ico-xfer').style.display = pitchers ? '' : 'none';
+  $('btn-transfer').classList.toggle('disabled', !pitchers);
+  setAgentState('Running');
+
+  setVals({
+    'c-sal': c.salutation, 'c-first': c.firstName, 'c-last': c.lastName,
+    'c-title': c.jobTitle, 'c-state': c.state, 'c-country': c.country,
+    'c-tel1': '', 'c-ext1': '', 'c-tel2': c.tel, 'c-ext2': '', 'c-tel3': '', 'c-ext3': '',
+    'co-name': co.name, 'co-url': co.url, 'co-state': c.state, 'co-country': c.country,
+    'co-tel1': co.tel, 'co-tel2': '',
+    'ivr1': '', 'ivr2': '', 'ivr3': '', 'ivr-path': '',
+    'lead-id': leadIdFor(scn.id), 'notes-new': ''
+  });
+
+  $('chk-direct').checked = false;
+  $('chk-graceful').checked = false;
+  document.querySelectorAll('input[name="call-rep"]').forEach(cb => cb.checked = false);
+  $('disp').selectedIndex = -1;
+  requestAnimationFrame(() => { $('disp').scrollTop = 0; });
+  $('btn-submit').disabled = false;
+
+  $('special').textContent = scn.specialInstructions || '';
+  $('notes-old').textContent = scn.previousNotes || '';
+  renderScript(scn);
+
+  if (scn.popup) {
+    setCallState(scn.popup, true);
+    $('redial-msg').textContent = scn.popup;
+    setRedial(true);
+    setHangup(false);
+    showPopup(scn.popup);
+  } else {
+    setCallState('Connected');
+    $('redial-msg').textContent = '';
+    setRedial(false);
+    setHangup(true);
+  }
+}
+
+function renderScript(scn) {
+  const dm = `${scn.contact.firstName || 'Mike'} ${scn.contact.lastName || 'Smith'}`;
+  const dmFirst = scn.contact.firstName || 'Mike';
+  const pitcher = scn.pitcher.name || 'John Jackson';
+  const pFirst = pitcher.split(' ')[0];
+  const lines = [
+    ['Gatekeeper', 'How may I direct your call?'],
+    ['Agent', `Hi could you connect me to ${esc(dm)} please?`],
+    ['Gatekeeper', 'May I know who is calling?'],
+    ['Agent', `This is ${AGENT_NAME} (agent's first name ONLY) calling on behalf of <mark>${esc(pitcher)}</mark>`],
+    ['Gatekeeper', 'What is this regarding?'],
+    ['Agent', `I am an assistant to ${esc(pFirst)} and ${esc(pFirst)} asked me to contact ${esc(dmFirst)} and transfer the call once I manage to get him online.`],
+    ['Gatekeeper (still insisting for the reason)', 'What is this regarding?'],
+    ['Agent', `I am not privy to the substance of the call. ${esc(pFirst)} asked to contact ${esc(dmFirst)} and connect the call once I manage to get him over the call.`]
+  ];
+  $('script').innerHTML = lines.map(([who, txt], i) =>
+    (i % 2 === 0 ? '<p>' : '') + `${esc(who)}: ${txt}` + (i % 2 === 0 ? '<br>' : '</p>')
+  ).join('');
+}
+
+/* =====================================================================
+   Agent actions
+   ===================================================================== */
+function canAct() { return S.scenario && S.attempt && !S.busy && !anyDialogOpen(); }
+function logKey(k) { S.attempt.hotkeys.push(k); }
+
+function onTransfer() {
+  if (!canAct()) return;
+  logKey('F1');
+  S.attempt.transferred = true;
+  if (S.scenario.pitcher.busy) {
+    setCallState('No Pitcher Available', true);
+    toast('F1 – Transfer attempted with Pitchers = 0');
+  } else {
+    setCallState('Transferred');
+    setHangup(false);
+    toast('F1 – Call transferred to pitcher');
+  }
+}
+
+function onLeaveVm(box) {
+  if (!canAct()) return;
+  logKey('F10');
+  setCallState('Voicemail Dropped');
+  setHangup(false);
+  setRedial(true);
+  if (!$('notes-new').value.trim() && !S.attempt.notes.length) $('notes-new').value = 'Voicemail left';
+  toast('F10 – Voicemail dropped (' + box + ')');
+}
+
+function onRedial() {
+  if (!canAct() || $('btn-redial').classList.contains('disabled')) return;
+  logKey('F11');
+  $('redial-msg').textContent = '';
+  setRedial(false);
+  setHangup(true);
+  setCallState('Dialing…');
+  setTimeout(() => setCallState('Connected'), 900);
+}
+
+function onHangUp() {
+  if (!canAct() || $('btn-hangup').classList.contains('disabled')) return;
+  logKey('F12');
+  setCallState('Call Ended');
+  setHangup(false);
+  setRedial(true);
+}
+
+function playIvr(n) {
+  const v = $('ivr' + n).value.trim();
+  if (!v) return toast('Enter a digit / option in IVR box ' + n + ' first');
+  const path = $('ivr-path');
+  path.value = (path.value ? path.value + ' > ' : '') + v;
+  toast('Sent DTMF: ' + v);
+}
+
+function commitNote() {
+  const box = $('notes-new');
+  const txt = box.value.trim();
+  if (!txt || !S.attempt) return;
+  S.attempt.notes.push(txt);
+  const stamp = new Date().toLocaleString('en-US',
+    { month: '2-digit', day: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const old = $('notes-old');
+  old.textContent = `${stamp} ${AGENT_HANDLE}: ${txt}\n` + old.textContent;
+  old.scrollTop = 0;
+  box.value = '';
+}
+
+function setAgentState(state) {
+  const bar = $('state-bar');
+  bar.textContent = state;
+  bar.className = 'state-bar' + (state === 'Paused' ? ' paused' : state === 'Ending' ? ' ending' : '');
+  $('btn-run').classList.toggle('on', state === 'Running');
+  $('btn-pause').classList.toggle('on', state === 'Paused');
+  $('btn-end').classList.toggle('on', state === 'Ending');
+}
+
+/* =====================================================================
+   Disposition + Call Alert + grading
+   ===================================================================== */
+function onSubmitDisposition() {
+  if (!canAct()) return;
+  const disp = $('disp').value;
+  if (!disp) return showPopup('Please select a disposition.');
+
+  if (CALL_ALERT_DISPOSITIONS.has(disp)) {
+    $('alert-disp').textContent = $('disp').selectedOptions[0].text;
+    $('alert-reason').innerHTML = '<option value=""></option>' +
+      S.alertReasons.map(r => `<option>${esc(r)}</option>`).join('');
+    $('alert-notes').value = '';
+    openOverlay('dlg-alert');
+    $('alert-reason').focus();
+    return;
+  }
+  sendSubmission(disp);
+}
+
+function closeCallAlert(submitted) {
+  closeOverlay('dlg-alert');
+  S.attempt.callAlertSubmitted = submitted;
+  S.attempt.callAlertReason = submitted ? $('alert-reason').value : '';
+  S.attempt.callAlertNotes = submitted ? $('alert-notes').value.trim() : '';
+  sendSubmission($('disp').value);
+}
+
+async function sendSubmission(disposition) {
+  if (S.busy) return;
+  S.busy = true;
+  $('btn-submit').disabled = true;
+  $('loading').textContent = 'Saving call…';
+  $('loading').classList.add('open');
+
+  const pending = $('notes-new').value.trim();
+  const a = S.attempt;
+  try {
+    const videoUrl = await uploadCurrentClip();
+    const events = S.events.splice(0);
+    const res = await server('submitTraineeAttempt', {
+      sessionId: S.session.sessionId,
+      scenarioId: S.scenario.id,
+      selectedDisposition: disposition,
+      directCallChecked: $('chk-direct').checked,
+      gracefulExitChecked: $('chk-graceful').checked,
+      callReports: [...document.querySelectorAll('input[name="call-rep"]:checked')].map(cb => cb.value),
+      notesEntered: a.notes.concat(pending ? [pending] : []).join(' | '),
+      callAlertSubmitted: a.callAlertSubmitted,
+      callAlertReason: a.callAlertReason,
+      callAlertNotes: a.callAlertNotes,
+      hotkeysUsed: a.hotkeys,
+      transferred: a.transferred,
+      videoUrl,
+      events
+    });
+    S.scenario = null;
+    if (res.done) S.lastDone = res.summary;
+    if (res.showAnswers && res.result) {
+      showScorecard(res);
+    } else if (res.done) {
+      showDone(res.summary);
+    } else {
+      toast(`Call ${res.index} of ${res.total} saved`);
+      S.busy = false;
+      await loadCurrentCall();
+    }
+  } catch (err) {
+    toast(err.message, 6000);
+    if (/already submitted/i.test(err.message)) { S.busy = false; await loadCurrentCall(); return; }
+    $('btn-submit').disabled = false;
+    startClip();
+  } finally {
+    S.busy = false;
+    $('loading').classList.remove('open');
+  }
+}
+
+function showScorecard(res) {
+  const r = res.result;
+  S.calls++;
+  S.scoreSum += r.score;
+  $('score').textContent = Math.round(S.scoreSum / S.calls);
+
+  const pass = r.status === 'PASSED';
+  $('score-banner').className = 'banner ' + (pass ? 'pass' : 'fail');
+  $('score-banner').textContent = `Call ${res.index} of ${res.total}: ${r.status} – Score ${r.score}/100`;
+
+  const list = (title, color, arr) => arr.length
+    ? `<h4 style="color:${color}">${title}</h4><ul>${arr.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : '';
+  $('score-errs').innerHTML = pass
+    ? '<b style="color:#0F7B0F">Excellent! Perfect adherence to ConnectAndSell protocol.</b>'
+    : list('Critical Errors (−50 each)', '#C00000', r.criticalErrors) +
+      list('Process / M&amp;P Errors (−15 each)', '#C55A00', r.processErrors);
+
+  const e = r.expected || {};
+  const yn = b => b ? 'Checked' : 'Unchecked';
+  const rows = [
+    ['Correct disposition', e.disposition],
+    ['Call report', e.callReport],
+    ['Direct Call', yn(e.directCall)],
+    ['Graceful Exit', yn(e.gracefulExit)],
+    ['Call Alert', e.callAlertRequired ? 'Required' + (e.callAlertNotes ? ' – ' + e.callAlertNotes : ' (leave blank)') : 'Not required'],
+    e.agentNotes ? ['Agent notes', e.agentNotes] : null
+  ].filter(Boolean);
+  $('score-expect').innerHTML = rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+
+  $('btn-next').textContent = res.done ? 'See Final Results' : 'Next Call';
+  openOverlay('dlg-score');
+  $('btn-next').focus();
+}
+
+/* =====================================================================
+   Ending
+   ===================================================================== */
+function confirmEnd() {
+  if (!S.session || S.busy) return;
+  openOverlay('dlg-end');
+}
+
+async function endNow() {
+  closeOverlay('dlg-end');
+  S.busy = true;
+  $('loading').textContent = 'Ending simulation…';
+  $('loading').classList.add('open');
+  discardClip();
+  try {
+    const res = await server('finishSession', S.session.sessionId);
+    showDone(res.summary);
+  } catch (err) {
+    toast(err.message, 6000);
+  } finally {
+    S.busy = false;
+    $('loading').classList.remove('open');
+  }
+}
+
+function showDone(sum) {
+  closeOverlay('dlg-score');
+  stopCamera();
+  S.scenario = null;
+  if (sum) {
+    $('done-result').textContent = `${sum.result} – ${sum.average}/100`;
+    $('done-result').style.color = sum.result === 'PASSED' ? '#0F7B0F' : '#C00000';
+    $('done-kv').innerHTML = [
+      ['Calls completed', `${sum.answered} of ${sum.total}`],
+      ['Calls passed', sum.passedCalls],
+      ['Average score', `${sum.average} (pass mark ${sum.passMark})`]
+    ].map(([k, v]) => `<div>${esc(k)}</div><div><b>${esc(v)}</b></div>`).join('');
+  } else {
+    $('done-result').textContent = '';
+    $('done-kv').innerHTML = '';
+  }
+  openScreen('scr-done');
+}
+
+/* =====================================================================
+   Hotkeys
+   ===================================================================== */
+function onKey(e) {
+  if (e.key === 'Escape') {
+    if ($('dlg-popup').classList.contains('open')) closePopup();
+    else if ($('dlg-alert').classList.contains('open')) closeCallAlert(false);
+    else if ($('dlg-end').classList.contains('open')) closeOverlay('dlg-end');
+    return;
+  }
+  if (!S.session || document.querySelector('.screen.open')) return;
+  const map = { F1: onTransfer, F10: () => onLeaveVm('Any voicemail Box'), F11: onRedial, F12: onHangUp };
+  if (map[e.key]) {
+    e.preventDefault();
+    map[e.key]();
+  }
+}
+
+/* =====================================================================
+   UI helpers
+   ===================================================================== */
+function setVals(obj) { for (const id in obj) $(id).value = obj[id] || ''; }
+
+function setCallState(text, isAlert) {
+  $('call-state').textContent = text;
+  $('call-state').classList.toggle('alert', !!isAlert);
+}
+function setRedial(on) { $('btn-redial').classList.toggle('disabled', !on); }
+function setHangup(on) { $('btn-hangup').classList.toggle('disabled', !on); }
+
+function showPopup(text) {
+  $('popup-text').textContent = text;
+  openOverlay('dlg-popup');
+  $('popup-ok').focus();
+}
+function closePopup() { closeOverlay('dlg-popup'); }
+
+function openOverlay(id) { $(id).classList.add('open'); }
+function closeOverlay(id) { $(id).classList.remove('open'); }
+function anyDialogOpen() { return !!document.querySelector('.overlay.open, .screen.open'); }
+function openScreen(id) { $(id).classList.add('open'); }
+function closeScreen(id) { $(id).classList.remove('open'); }
+
+let toastTimer;
+function toast(msg, ms = 2200) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function setupTooltips() {
+  const tip = $('tip');
+  let timer;
+  document.querySelectorAll('[data-tip]').forEach(el => {
+    el.addEventListener('mouseenter', ev => {
+      timer = setTimeout(() => {
+        tip.textContent = el.dataset.tip;
+        tip.style.left = (ev.clientX + 12) + 'px';
+        tip.style.top = (ev.clientY + 18) + 'px';
+        tip.style.display = 'block';
+      }, 450);
+    });
+    el.addEventListener('mouseleave', () => { clearTimeout(timer); tip.style.display = 'none'; });
+  });
+}
+
+function leadIdFor(id) {
+  let h = 2166136261;
+  for (const ch of String(id)) { h ^= ch.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return String(300000000 + (Math.abs(h) % 99999999));
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+</script>
+</body>
+</html>
