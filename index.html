@@ -95,6 +95,25 @@
 
   .lock-msg { font-size: 15px; line-height: 1.5; }
 
+  /* ---------------- Voice caller panel ---------------- */
+  .voice { flex: 1; display: none; min-width: 0; }
+  .voice.on { display: block; }
+  .v-status { font-size: 22px; font-weight: 600; color: #111; display: flex; align-items: center; gap: 10px; }
+  .v-status.agent { color: #0F7B0F; }
+  .v-sub { font-size: 16px; color: #444; margin-top: 2px; min-height: 20px; }
+  .v-note { display: none; font-size: 15px; color: #7A4100; background: #FFF6E0; border: 1px solid #F0D58A; padding: 5px 9px; margin-top: 6px; border-radius: 3px; }
+  .v-ctrl { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  .meter { width: 140px; height: 8px; background: #E5E5E5; border-radius: 4px; overflow: hidden; }
+  .meter i { display: block; height: 100%; width: 0; background: #22B14C; transition: width .05s; }
+  .v-btn { border: 1px solid #0055EA; background: #fff; color: #0055EA; height: 30px; padding: 0 12px; border-radius: 3px; cursor: pointer; font-size: 13px; }
+  .v-btn:disabled { opacity: .4; cursor: default; }
+  .transcript {
+    margin: -4px auto 8px; background: #FFFDF2; border: 1px solid #E6D9A8; border-radius: 4px;
+    padding: 10px 14px; font-size: 15px; line-height: 1.5; display: none; max-height: 220px; overflow: auto;
+  }
+  .transcript.open { display: block; }
+  .transcript .who { font-weight: 700; }
+
   /* ---------------- Agent window canvas ---------------- */
   .stage { margin: 0 auto; position: relative; }
   .app {
@@ -296,11 +315,22 @@
 <div class="trainer" id="trainer">
   <span class="call-no"><span id="call-no">Call 1</span><small id="call-of">of 10</small></span>
   <div class="event" id="trigger"><b>Scenario Event:</b> Loading practice call…</div>
+  <div class="voice" id="voice-panel">
+    <div class="v-status" id="v-status"><span id="v-icon">📞</span><span id="v-text">Dialing…</span></div>
+    <div class="v-sub" id="v-sub"></div>
+    <div class="v-note" id="v-note"></div>
+    <div class="v-ctrl">
+      <span style="font-size:12px;color:#666">Mic</span><div class="meter"><i id="v-level"></i></div>
+      <button class="v-btn" id="v-continue" onclick="agentContinue('button')" disabled>Continue (Space)</button>
+      <button class="v-btn" id="v-transcript" onclick="toggleTranscript()">Show transcript</button>
+    </div>
+  </div>
   <div class="side">
     <div class="cam-box" id="cam-small"><video id="cam-video-small" autoplay muted playsinline></video><span class="rec off" id="rec-dot">REC</span></div>
     <button class="end-btn" onclick="confirmEnd()">End Simulation</button>
   </div>
 </div>
+<div class="transcript" id="transcript"></div>
 
 <!-- ======================= ConnectAndSell Desktop agent window ======================= -->
 <div class="stage" id="stage">
@@ -684,7 +714,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         c.facilities.map(f => `<option>${esc(f)}</option>`).join('');
       $('fac-wrap').style.display = '';
     }
-    $('signin-sub').textContent = `You will take ${c.questionsPerSession} practice calls. ` +
+    if (c.voiceCaller) $('btn-cam').textContent = 'Turn on camera & microphone';
+    $('signin-sub').textContent = `You will take ${c.questionsPerSession} practice calls` +
+      (c.voiceCaller ? ' with a live voice caller – please wear a headset. ' : '. ') +
       (c.allowedDomain ? `Use your @${c.allowedDomain.replace(/^@/, '')} email.` : '');
     if (!c.requireVideo) {
       $('consent-text').textContent = 'I confirm I am the agent taking this simulation. My results will be shared with my QA Manager and Facility Manager.';
@@ -702,6 +734,7 @@ function fitToWindow() {
   $('stage').style.width = (W * s) + 'px';
   $('stage').style.height = (H * s) + 'px';
   $('trainer').style.width = (W * s) + 'px';
+  $('transcript').style.width = (W * s) + 'px';
 }
 
 /* =====================================================================
@@ -744,6 +777,16 @@ async function enableCamera(fromLock) {
     $('btn-cam').style.display = 'none';
     $('signin-err').textContent = '';
     stream.getVideoTracks()[0].addEventListener('ended', onCameraLost);
+    // Microphone: lets the voice caller hear when the agent answers, and puts the agent's voice in the recording.
+    if (S.config && S.config.voiceCaller) {
+      try {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        mic.getAudioTracks().forEach(t => stream.addTrack(t));
+        setupMic(mic);
+      } catch (e) {
+        toast('Microphone not available – use the Continue button (or Space) after you speak.', 6000);
+      }
+    }
     if (fromLock) {
       closeOverlay('dlg-cam');
       noteEvent('Camera turned back on');
@@ -778,7 +821,7 @@ function startClip() {
   try {
     Cam.mime = pickMime();
     Cam.chunks = [];
-    Cam.rec = new MediaRecorder(Cam.stream, { mimeType: Cam.mime || undefined, videoBitsPerSecond: VIDEO_BITRATE });
+    Cam.rec = new MediaRecorder(Cam.stream, { mimeType: Cam.mime || undefined, videoBitsPerSecond: VIDEO_BITRATE, audioBitsPerSecond: 32000 });
     Cam.rec.ondataavailable = e => { if (e.data && e.data.size) Cam.chunks.push(e.data); };
     Cam.rec.start(2000);
     setRecDot(true);
@@ -848,6 +891,382 @@ function blobToBase64(blob) {
 function noteEvent(text) { S.events.push(text); }
 
 /* =====================================================================
+   Voice caller: phone sounds (Web Audio) + spoken lines (speechSynthesis)
+   + agent turns detected from the microphone (or Space / Continue)
+   ===================================================================== */
+const SPEAKERS = {
+  GK:  { label: 'Gatekeeper',       sex: 'f', lang: 'en-US', rate: 1.02, pitch: 1.1 },
+  DM:  { label: 'Prospect',         sex: 'm', lang: 'en-US', rate: 1.0,  pitch: 0.95 },
+  VM:  { label: 'Voicemail',        sex: 'm', lang: 'en-US', rate: 1.0,  pitch: 0.95, same: 'DM' },
+  P:   { label: 'Person',           sex: 'm', lang: 'en',    rate: 1.05, pitch: 1.0 },
+  F:   { label: 'Person',           sex: 'f', lang: 'en',    rate: 1.0,  pitch: 1.2 },
+  VM2: { label: 'Voicemail',        sex: 'f', lang: 'en',    rate: 1.0,  pitch: 1.15, same: 'F' },
+  IVR: { label: 'Automated system', sex: 'f', lang: 'en-US', rate: 0.95, pitch: 1.0 },
+  REC: { label: 'Recorded message', sex: 'f', lang: 'en-GB', rate: 0.95, pitch: 1.0 },
+  ES:  { label: 'Person',           sex: 'f', lang: 'es',    rate: 1.0,  pitch: 1.0 }
+};
+const GREETINGS = [
+  'Good morning, {company}. This is Linda. How may I direct your call?',
+  '{company}, how can I help you?',
+  'Thank you for calling {company}. How may I direct your call?',
+  'Hello, {company}, this is Rachel speaking.'
+];
+const FEMALE = /female|samantha|victoria|karen|moira|tessa|zira|susan|aria|jenny|serena|fiona|allison|ava|joanna|salli|kimberly|libby|sonia|natasha|google us english|google español|paulina|monica|helena|sabina/i;
+const MALE = /\bmale|daniel|alex\b|fred|david|mark|guy|tom\b|aaron|arthur|ryan|eric|george|james|matthew|brian|christopher|jorge|pablo|google uk english male/i;
+const ABORT = new Error('voice-aborted');
+
+const Voice = {
+  enabled: false, showText: false, ctx: null, master: null, gen: 0,
+  voices: [], picked: {}, lead: null, scn: null, lines: [], transcript: [],
+  waiting: null, viewed: false, mic: null, analyser: null, meterTimer: null
+};
+
+if (window.speechSynthesis) {
+  const load = () => { Voice.voices = speechSynthesis.getVoices(); Voice.picked = {}; };
+  load();
+  speechSynthesis.onvoiceschanged = load;
+}
+
+function audioCtx() {
+  if (!Voice.ctx) Voice.ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (Voice.ctx.state === 'suspended') Voice.ctx.resume();
+  return Voice.ctx;
+}
+
+/** Stops everything the caller is doing (speech, sounds, waiting for the agent). */
+function voiceStop() {
+  Voice.gen++;
+  if (window.speechSynthesis) speechSynthesis.cancel();
+  if (Voice.master) { try { Voice.master.disconnect(); } catch (e) { /* ignore */ } Voice.master = null; }
+  if (Voice.waiting) { const w = Voice.waiting; Voice.waiting = null; w.reject(ABORT); }
+  setMeter(0);
+  $('v-continue').disabled = true;
+}
+
+function master() {
+  const c = audioCtx();
+  if (!Voice.master) { Voice.master = c.createGain(); Voice.master.gain.value = 1; Voice.master.connect(c.destination); }
+  return Voice.master;
+}
+
+function alive(gen) { if (gen !== Voice.gen) throw ABORT; }
+
+function wait(ms, gen) {
+  return new Promise((resolve, reject) => setTimeout(() => gen !== Voice.gen ? reject(ABORT) : resolve(), ms));
+}
+
+/* ---------- Phone sounds ---------- */
+function tone(freqs, sec, gen, gain = 0.1, type = 'sine') {
+  const c = audioCtx(), g = c.createGain(), t = c.currentTime;
+  g.gain.setValueAtTime(gain, t);
+  g.gain.setValueAtTime(gain, t + sec - 0.01);
+  g.gain.linearRampToValueAtTime(0, t + sec);
+  g.connect(master());
+  freqs.forEach(f => {
+    const o = c.createOscillator();
+    o.type = type; o.frequency.value = f; o.connect(g); o.start(t); o.stop(t + sec);
+  });
+  return wait(sec * 1000, gen);
+}
+
+function noise(sec, gen, gain = 0.06) {
+  const c = audioCtx();
+  const buf = c.createBuffer(1, Math.max(1, Math.floor(c.sampleRate * sec)), c.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (0.6 + 0.4 * Math.sin(i / 900));
+  const src = c.createBufferSource(), g = c.createGain();
+  src.buffer = buf; g.gain.value = gain; src.connect(g); g.connect(master()); src.start();
+  return wait(sec * 1000, gen);
+}
+
+const SOUNDS = {
+  async ring(n, gen) {
+    n = Math.max(1, Number(n) || 2);
+    for (let i = 0; i < n; i++) {
+      voiceStatus('📞', 'Ringing…');
+      await tone([440, 480], 2, gen, 0.07);
+      await wait(i === n - 1 ? 400 : 2500, gen);
+    }
+  },
+  async busy(n, gen) {
+    voiceStatus('📞', 'Busy signal');
+    for (let i = 0; i < (Number(n) || 6); i++) { await tone([480, 620], 0.5, gen, 0.07); await wait(500, gen); }
+  },
+  async sit(n, gen) {
+    voiceStatus('📞', 'Connecting…');
+    await tone([913.8], 0.274, gen, 0.08);
+    await tone([1370.6], 0.274, gen, 0.08);
+    await tone([1776.7], 0.38, gen, 0.08);
+    await wait(300, gen);
+  },
+  async fax(n, gen) {
+    voiceStatus('📠', 'High-pitched tones on the line');
+    for (let i = 0; i < 2; i++) { await tone([1100], 0.5, gen, 0.08); await wait(2500, gen); }
+    await tone([2100], 2.6, gen, 0.07);
+    for (let i = 0; i < 40; i++) await tone([300 + Math.random() * 2700], 0.06, gen, 0.05, 'square');
+    for (let i = 0; i < 3; i++) { await tone([1100], 0.5, gen, 0.08); await wait(2500, gen); }
+  },
+  async beep(n, gen) { await tone([1000], 0.6, gen, 0.09); voiceStatus('📼', 'Recording after the tone…'); },
+  async transfer(n, gen) {
+    voiceStatus('📞', 'Transferring…');
+    await noise(0.04, gen, 0.2);
+    await wait(500, gen);
+    await tone([440, 480], 1.6, gen, 0.06);
+    await wait(900, gen);
+  },
+  async hold(n, gen) {
+    voiceStatus('🎵', 'On hold…');
+    const notes = [523, 659, 784, 659, 587, 698, 880, 698];
+    const end = Date.now() + (Number(n) || 3) * 1000;
+    for (let i = 0; Date.now() < end; i++) await tone([notes[i % notes.length]], 0.35, gen, 0.04, 'triangle');
+  },
+  async noise(n, gen) { await noise(Number(n) || 1, gen, 0.08); },
+  async pause(n, gen) { await wait((Number(n) || 1) * 1000, gen); }
+};
+
+const DTMF = { 1: [697, 1209], 2: [697, 1336], 3: [697, 1477], 4: [770, 1209], 5: [770, 1336], 6: [770, 1477],
+  7: [852, 1209], 8: [852, 1336], 9: [852, 1477], '*': [941, 1209], 0: [941, 1336], '#': [941, 1477] };
+const KEYPAD = 'abc2def3ghi4jkl5mno6pqrs7tuv8wxyz9';
+async function playDtmf(str) {
+  const gen = Voice.gen;
+  for (const raw of String(str).toLowerCase()) {
+    let ch = raw;
+    if (/[a-z]/.test(ch)) { const i = KEYPAD.indexOf(ch); ch = KEYPAD.slice(i).match(/\d/)[0]; }
+    if (!DTMF[ch]) continue;
+    try { await tone(DTMF[ch], 0.12, gen, 0.08); await wait(80, gen); } catch (e) { return; }
+  }
+}
+
+/* ---------- Speech ---------- */
+function voiceFor(code) {
+  const spk = SPEAKERS[code] || SPEAKERS.P;
+  const key = spk.same || code;
+  if (Voice.picked[key] !== undefined) return Voice.picked[key];
+  const used = new Set(Object.values(Voice.picked).filter(Boolean).map(v => v.name));
+  const byLang = Voice.voices.filter(v => v.lang && v.lang.toLowerCase().startsWith(spk.lang.toLowerCase()));
+  const pool = byLang.length ? byLang : Voice.voices.filter(v => /^en/i.test(v.lang));
+  const sexRe = spk.sex === 'f' ? FEMALE : MALE;
+  const v = pool.find(x => sexRe.test(x.name) && !used.has(x.name)) ||
+            pool.find(x => sexRe.test(x.name)) ||
+            pool.find(x => !used.has(x.name)) || pool[0] || null;
+  Voice.picked[key] = v;
+  return v;
+}
+
+function say(code, text, gen) {
+  const spk = SPEAKERS[code] || SPEAKERS.P;
+  voiceStatus('🔊', `${spk.label} is speaking…`, Voice.showText ? text : '');
+  if ($('call-state').textContent === 'Dialing…') setCallState('Connected');
+  addTranscript(spk.label, text);
+  if (!window.speechSynthesis) return wait(1200 + text.length * 60, gen);
+  return new Promise((resolve, reject) => {
+    const u = new SpeechSynthesisUtterance(text);
+    const v = voiceFor(code);
+    if (v) u.voice = v;
+    u.lang = v ? v.lang : spk.lang;
+    // Same voice used for two roles? Shift pitch so they still sound different.
+    u.rate = spk.rate;
+    u.pitch = spk.pitch;
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(t); gen === Voice.gen ? resolve() : reject(ABORT); };
+    const t = setTimeout(finish, 2500 + text.length * 95); // Chrome sometimes never fires onend
+    u.onend = finish;
+    u.onerror = finish;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  });
+}
+
+/* ---------- Agent turn: mic voice-activity detection ---------- */
+function setupMic(stream) {
+  const track = stream && stream.getAudioTracks()[0];
+  if (!track) return;
+  const c = audioCtx();
+  const src = c.createMediaStreamSource(new MediaStream([track]));
+  Voice.analyser = c.createAnalyser();
+  Voice.analyser.fftSize = 1024;
+  src.connect(Voice.analyser);
+  Voice.mic = track;
+}
+
+function micLevel() {
+  if (!Voice.analyser) return 0;
+  const buf = new Float32Array(Voice.analyser.fftSize);
+  Voice.analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+  return Math.sqrt(sum / buf.length);
+}
+
+function waitAgent(hint, gen) {
+  voiceStatus('🎙️', 'Your turn – speak to the caller', hint ? 'Expected: ' + fill(hint) : '', true);
+  $('v-continue').disabled = false;
+  return new Promise((resolve, reject) => {
+    let floor = 0.01, speakingMs = 0, silentMs = 0, started = false, spoke = 0;
+    const startedAt = Date.now();
+    const finish = how => {
+      clearInterval(timer);
+      setMeter(0);
+      $('v-continue').disabled = true;
+      Voice.waiting = null;
+      addTranscript('You', how === 'voice' ? `(spoke for ${Math.max(1, Math.round(spoke / 1000))}s)` : how === 'ivr' ? '(used the IVR keypad)' : '(continued)');
+      resolve();
+    };
+    const timer = setInterval(() => {
+      if (gen !== Voice.gen) { clearInterval(timer); return; }
+      const lvl = micLevel();
+      setMeter(Math.min(1, lvl * 12));
+      if (!Voice.analyser) return;
+      const thr = Math.max(0.015, floor * 3);
+      if (!started && Date.now() - startedAt < 600) { floor = floor * 0.8 + lvl * 0.2; return; }
+      if (lvl > thr) {
+        speakingMs += 50; silentMs = 0;
+        if (speakingMs > 150) { started = true; spoke += 50; }
+      } else {
+        if (!started) { floor = floor * 0.95 + lvl * 0.05; speakingMs = 0; }
+        silentMs += 50;
+        if (started && silentMs >= 1100 && spoke >= 400) finish('voice');
+      }
+    }, 50);
+    Voice.waiting = { resolve: finish, reject: err => { clearInterval(timer); reject(err); } };
+  });
+}
+
+function agentContinue(how) { if (Voice.waiting) Voice.waiting.resolve(how || 'button'); }
+
+/* ---------- Script runner ---------- */
+function fill(text) {
+  const l = Voice.lead || {};
+  const map = { first: l.first, last: l.last, company: l.company, title: l.title, pitcher: l.pitcher,
+    pfirst: String(l.pitcher || '').split(' ')[0] };
+  return String(text).replace(/\{(first|last|company|title|pitcher|pfirst)\}/g, (m, k) => map[k] || '');
+}
+
+/** Returns the lead after any {set ...} lines in the script. */
+function leadFor(scn) {
+  const c = scn.contact, co = scn.company;
+  const lead = { first: c.firstName, last: c.lastName, title: c.jobTitle, company: co.name, pitcher: scn.pitcher.name || 'John Jackson' };
+  String(scn.script || '').split('\n').forEach(line => {
+    const m = /^\s*\{set\s+(.*)\}\s*$/i.exec(line);
+    if (!m) return;
+    m[1].split(',').forEach(pair => {
+      const [k, ...v] = pair.split('=');
+      if (k && k.trim() in lead) lead[k.trim()] = v.join('=').trim();
+    });
+  });
+  return lead;
+}
+
+function expandScript(script) {
+  const out = [];
+  String(script || '').split('\n').map(s => s.trim()).filter(Boolean).forEach(line => {
+    if (/^\{open\}$/i.test(line)) {
+      out.push(`{ring ${1 + Math.floor(Math.random() * 3)}}`);
+      out.push('GK: ' + GREETINGS[Math.floor(Math.random() * GREETINGS.length)]);
+      out.push('AGENT: Ask for {first} {last}');
+    } else out.push(line);
+  });
+  return out;
+}
+
+async function runScript(scn) {
+  voiceStop();
+  const gen = Voice.gen;
+  Voice.scn = scn;
+  try {
+    for (const line of expandScript(scn.script)) {
+      alive(gen);
+      const cmd = /^\{(\w+)\s*(.*?)\}$/.exec(line);
+      const spoken = /^(GK|DM|P|F|IVR|REC|VM|VM2|ES)\s*:\s*(.*)$/i.exec(line);
+      const agent = /^AGENT\s*:\s*(.*)$/i.exec(line);
+      if (spoken) await say(spoken[1].toUpperCase(), fill(spoken[2]), gen);
+      else if (agent) await waitAgent(agent[1], gen);
+      else if (cmd) {
+        const name = cmd[1].toLowerCase(), arg = cmd[2];
+        if (SOUNDS[name]) await SOUNDS[name](arg, gen);
+        else if (name === 'note') showNote(fill(arg));
+        else if (name === 'hangup') { callerHungUp(); return; }
+        else if (name === 'popup') { dialerPopup(scn.popup || 'Call Failed'); return; }
+      }
+    }
+    alive(gen);
+    voiceStatus('📞', 'Line open', 'Take the next action on the agent app.');
+  } catch (err) {
+    if (err !== ABORT) console.error(err);
+  }
+}
+
+function callerHungUp() {
+  voiceStatus('📴', 'The other side hung up');
+  addTranscript('System', '(the other side hung up)');
+  setCallState('Call Ended');
+  setHangup(false);
+  setRedial(true);
+}
+
+function dialerPopup(text) {
+  voiceStatus('⚠️', text);
+  setCallState(text, true);
+  $('redial-msg').textContent = text;
+  setRedial(true);
+  setHangup(false);
+  showPopup(text);
+}
+
+/* ---------- Voice panel UI ---------- */
+function voiceStatus(icon, text, sub, agentTurn) {
+  $('v-icon').textContent = icon;
+  $('v-text').textContent = text;
+  $('v-sub').textContent = sub || '';
+  $('v-status').classList.toggle('agent', !!agentTurn);
+}
+function setMeter(x) { $('v-level').style.width = Math.round(x * 100) + '%'; }
+function showNote(text) { $('v-note').textContent = 'Call context: ' + text; $('v-note').style.display = 'block'; }
+
+function addTranscript(who, text) {
+  Voice.transcript.push([who, text]);
+  if ($('transcript').classList.contains('open')) renderTranscript();
+}
+
+function renderTranscript() {
+  const scn = S.scenario;
+  $('transcript').innerHTML =
+    (scn ? `<div style="margin-bottom:6px"><b style="color:#0044B3">Scenario Event:</b> ${esc(scn.description)}</div>` : '') +
+    Voice.transcript.map(([w, t]) => `<div><span class="who">${esc(w)}:</span> ${esc(t)}</div>`).join('');
+  $('transcript').scrollTop = $('transcript').scrollHeight;
+}
+
+function toggleTranscript() {
+  const open = !$('transcript').classList.contains('open');
+  $('transcript').classList.toggle('open', open);
+  $('v-transcript').textContent = open ? 'Hide transcript' : 'Show transcript';
+  if (open) {
+    renderTranscript();
+    if (!Voice.viewed && !Voice.showText) { Voice.viewed = true; noteEvent(`Opened the transcript on call ${S.index}`); }
+  }
+}
+
+/** Called for every new call. Returns true when the voice caller is handling it. */
+function startVoiceCall(scn) {
+  voiceStop();
+  Voice.transcript = [];
+  Voice.viewed = false;
+  Voice.lead = leadFor(scn);
+  $('v-note').style.display = 'none';
+  $('transcript').classList.remove('open');
+  $('v-transcript').textContent = 'Show transcript';
+  const active = Voice.enabled && !!String(scn.script || '').trim();
+  $('voice-panel').classList.toggle('on', active);
+  $('trigger').style.display = active && !Voice.showText ? 'none' : '';
+  $('v-transcript').style.display = Voice.showText ? 'none' : '';
+  if (active) {
+    voiceStatus('📞', 'Dialing…');
+    setTimeout(() => { if (S.scenario === scn) runScript(scn); }, 700);
+  }
+  return active;
+}
+
+/* =====================================================================
    Sign-in → session → calls
    ===================================================================== */
 async function onStart() {
@@ -864,6 +1283,7 @@ async function onStart() {
   if (!$('in-consent').checked) return err.textContent = 'Please tick the confirmation box.';
 
   err.textContent = '';
+  try { audioCtx(); } catch (e) { /* no Web Audio */ }
   $('btn-start').disabled = true;
   $('btn-start').textContent = 'Starting…';
   try {
@@ -871,6 +1291,8 @@ async function onStart() {
       name, email, facility, photo: snapshot(), hasVideo: !!Cam.stream
     });
     S.total = S.session.total;
+    Voice.enabled = !!S.session.voiceCaller;
+    Voice.showText = !!S.session.showText;
     closeScreen('scr-signin');
     if (S.session.resumed) toast(`Welcome back, ${S.session.name}. Resuming at call ${S.session.answered + 1}.`, 4000);
     await loadCurrentCall();
@@ -884,6 +1306,7 @@ async function onStart() {
 
 async function loadCurrentCall() {
   if (S.lastDone) return showDone(S.lastDone);
+  try { audioCtx(); } catch (e) { /* no Web Audio */ }
   S.busy = true;
   closeOverlay('dlg-score');
   $('loading').textContent = 'Dialing…';
@@ -911,13 +1334,14 @@ function populate(scn) {
   S.scenario = scn;
   resetAttempt();
   const c = scn.contact, co = scn.company;
+  const lead = leadFor(scn);
 
   $('call-no').textContent = 'Call ' + S.index;
   $('call-of').textContent = 'of ' + S.total;
   $('trigger').innerHTML = '<b>Scenario Event:</b> ' + esc(scn.description);
 
   $('st-phone').textContent = AGENT_HANDLE;
-  $('st-campaign').textContent = 'Training :: ' + (co.name || 'Demo');
+  $('st-campaign').textContent = 'Training :: ' + (lead.company || 'Demo');
   const pitchers = scn.pitcher.busy ? 0 : 1;
   $('st-pitchers').textContent = pitchers;
   $('st-pitchers').className = 'badge ' + (pitchers ? 'green' : 'red');
@@ -927,10 +1351,10 @@ function populate(scn) {
   setAgentState('Running');
 
   setVals({
-    'c-sal': c.salutation, 'c-first': c.firstName, 'c-last': c.lastName,
-    'c-title': c.jobTitle, 'c-state': c.state, 'c-country': c.country,
+    'c-sal': c.salutation, 'c-first': lead.first, 'c-last': lead.last,
+    'c-title': lead.title, 'c-state': c.state, 'c-country': c.country,
     'c-tel1': '', 'c-ext1': '', 'c-tel2': c.tel, 'c-ext2': '', 'c-tel3': '', 'c-ext3': '',
-    'co-name': co.name, 'co-url': co.url, 'co-state': c.state, 'co-country': c.country,
+    'co-name': lead.company, 'co-url': lead.company ? co.url : '', 'co-state': c.state, 'co-country': c.country,
     'co-tel1': co.tel, 'co-tel2': '',
     'ivr1': '', 'ivr2': '', 'ivr3': '', 'ivr-path': '',
     'lead-id': leadIdFor(scn.id), 'notes-new': ''
@@ -947,7 +1371,14 @@ function populate(scn) {
   $('notes-old').textContent = scn.previousNotes || '';
   renderScript(scn);
 
-  if (scn.popup) {
+  const voiceOn = startVoiceCall(scn);
+  if (voiceOn) {
+    setCallState('Dialing…');
+    $('redial-msg').textContent = '';
+    setRedial(false);
+    setHangup(true);
+    if (scn.popup && !/\{popup\}/i.test(scn.script)) dialerPopup(scn.popup);
+  } else if (scn.popup) {
     setCallState(scn.popup, true);
     $('redial-msg').textContent = scn.popup;
     setRedial(true);
@@ -962,9 +1393,10 @@ function populate(scn) {
 }
 
 function renderScript(scn) {
-  const dm = `${scn.contact.firstName || 'Mike'} ${scn.contact.lastName || 'Smith'}`;
-  const dmFirst = scn.contact.firstName || 'Mike';
-  const pitcher = scn.pitcher.name || 'John Jackson';
+  const lead = leadFor(scn);
+  const dm = `${lead.first || ''} ${lead.last || ''}`.trim() || 'the prospect';
+  const dmFirst = lead.first || lead.last || 'the prospect';
+  const pitcher = lead.pitcher;
   const pFirst = pitcher.split(' ')[0];
   const lines = [
     ['Gatekeeper', 'How may I direct your call?'],
@@ -996,6 +1428,8 @@ function onTransfer() {
     toast('F1 – Transfer attempted with Pitchers = 0');
   } else {
     setCallState('Transferred');
+    voiceStop();
+    voiceStatus('📞', 'Call transferred to the pitcher');
     setHangup(false);
     toast('F1 – Call transferred to pitcher');
   }
@@ -1004,6 +1438,8 @@ function onTransfer() {
 function onLeaveVm(box) {
   if (!canAct()) return;
   logKey('F10');
+  voiceStop();
+  voiceStatus('📼', 'Voicemail dropped');
   setCallState('Voicemail Dropped');
   setHangup(false);
   setRedial(true);
@@ -1014,6 +1450,7 @@ function onLeaveVm(box) {
 function onRedial() {
   if (!canAct() || $('btn-redial').classList.contains('disabled')) return;
   logKey('F11');
+  voiceStop();
   $('redial-msg').textContent = '';
   setRedial(false);
   setHangup(true);
@@ -1024,6 +1461,8 @@ function onRedial() {
 function onHangUp() {
   if (!canAct() || $('btn-hangup').classList.contains('disabled')) return;
   logKey('F12');
+  voiceStop();
+  voiceStatus('📴', 'You ended the call');
   setCallState('Call Ended');
   setHangup(false);
   setRedial(true);
@@ -1034,7 +1473,8 @@ function playIvr(n) {
   if (!v) return toast('Enter a digit / option in IVR box ' + n + ' first');
   const path = $('ivr-path');
   path.value = (path.value ? path.value + ' > ' : '') + v;
-  toast('Sent DTMF: ' + v);
+  playDtmf(v);
+  agentContinue('ivr');
 }
 
 function commitNote() {
@@ -1090,6 +1530,7 @@ function closeCallAlert(submitted) {
 async function sendSubmission(disposition) {
   if (S.busy) return;
   S.busy = true;
+  voiceStop();
   $('btn-submit').disabled = true;
   $('loading').textContent = 'Saving call…';
   $('loading').classList.add('open');
@@ -1181,6 +1622,7 @@ function confirmEnd() {
 
 async function endNow() {
   closeOverlay('dlg-end');
+  voiceStop();
   S.busy = true;
   $('loading').textContent = 'Ending simulation…';
   $('loading').classList.add('open');
@@ -1198,6 +1640,7 @@ async function endNow() {
 
 function showDone(sum) {
   closeOverlay('dlg-score');
+  voiceStop();
   stopCamera();
   S.scenario = null;
   if (sum) {
@@ -1226,6 +1669,11 @@ function onKey(e) {
     return;
   }
   if (!S.session || document.querySelector('.screen.open')) return;
+  if (e.code === 'Space' && Voice.waiting && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) {
+    e.preventDefault();
+    agentContinue('button');
+    return;
+  }
   const map = { F1: onTransfer, F10: () => onLeaveVm('Any voicemail Box'), F11: onRedial, F12: onHangUp };
   if (map[e.key]) {
     e.preventDefault();
