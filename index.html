@@ -548,13 +548,14 @@
 <!-- ======================= Scorecard ======================= -->
 <div class="overlay" id="dlg-score">
   <div class="dlg" style="width:540px">
-    <div class="dlg-title"><span>Practice Call Debrief</span></div>
+    <div class="dlg-title"><span id="score-title">Practice Call Debrief</span></div>
     <div class="dlg-body">
       <div class="banner" id="score-banner"></div>
       <div class="errs" id="score-errs"></div>
       <table class="expect" id="score-expect"></table>
     </div>
     <div class="dlg-foot">
+      <button id="btn-pause-sim" onclick="pauseSim()">⏸ Pause</button>
       <button class="default" id="btn-next" onclick="loadCurrentCall()">Next Call</button>
     </div>
   </div>
@@ -597,6 +598,16 @@
     <div class="result-big" id="done-result"></div>
     <div class="kv" id="done-kv" style="text-align:left;max-width:460px;margin:14px auto"></div>
     <div class="sub">Your results and recordings have been sent to your QA Manager and Facility Manager. You can close this window.</div>
+  </div>
+</div>
+
+<!-- ======================= Paused screen ======================= -->
+<div class="screen" id="scr-paused">
+  <div class="card" style="text-align:center;width:520px">
+    <h1>⏸ Simulation paused</h1>
+    <div class="sub" id="pause-info" style="margin:10px 0 18px;font-size:15px"></div>
+    <button class="primary" onclick="resumeSim()">Resume – next call</button>
+    <div style="margin-top:14px"><a href="#" style="color:#C00000" onclick="event.preventDefault();closeScreen('scr-paused');confirmEnd()">End simulation instead</a></div>
   </div>
 </div>
 
@@ -1338,6 +1349,10 @@ async function loadCurrentCall() {
     populate(res.scenario);
     startClip();
   } catch (err) {
+    if (/already ended/i.test(err.message)) {
+      toast('This simulation was closed (inactive too long). Your managers have the report.', 8000);
+      return showDone(null);
+    }
     toast(err.message, 6000);
   } finally {
     S.busy = false;
@@ -1549,6 +1564,7 @@ async function sendSubmission(disposition) {
   if (S.busy) return;
   S.busy = true;
   voiceStop();
+  voiceStatus('💾', 'Saving call…');
   $('btn-submit').disabled = true;
   $('loading').textContent = 'Saving call…';
   $('loading').classList.add('open');
@@ -1576,15 +1592,8 @@ async function sendSubmission(disposition) {
     });
     S.scenario = null;
     if (res.done) S.lastDone = res.summary;
-    if (res.showAnswers && res.result) {
-      showScorecard(res);
-    } else if (res.done) {
-      showDone(res.summary);
-    } else {
-      toast(`Call ${res.index} of ${res.total} saved`);
-      S.busy = false;
-      await loadCurrentCall();
-    }
+    if (res.done && !(res.showAnswers && res.result)) showDone(res.summary);
+    else showScorecard(res);
   } catch (err) {
     toast(err.message, 6000);
     if (/already submitted/i.test(err.message)) { S.busy = false; await loadCurrentCall(); return; }
@@ -1597,6 +1606,20 @@ async function sendSubmission(disposition) {
 }
 
 function showScorecard(res) {
+  $('btn-pause-sim').style.display = res.done ? 'none' : '';
+  $('score-title').textContent = res.result ? 'Practice Call Debrief' : 'Call saved';
+  if (!res.result) { // test mode: no answers, just confirm and let the agent continue or pause
+    $('score-banner').className = 'banner';
+    $('score-banner').style.background = '#0055EA';
+    $('score-banner').textContent = `Call ${res.index} of ${res.total} saved`;
+    $('score-errs').innerHTML = '<span style="font-size:14px">Take a break with <b>Pause</b>, or continue when you are ready.</span>';
+    $('score-expect').innerHTML = '';
+    $('btn-next').textContent = 'Next Call';
+    openOverlay('dlg-score');
+    $('btn-next').focus();
+    return;
+  }
+  $('score-banner').style.background = '';
   const r = res.result;
   S.calls++;
   S.scoreSum += r.score;
@@ -1628,6 +1651,34 @@ function showScorecard(res) {
   $('btn-next').textContent = res.done ? 'See Final Results' : 'Next Call';
   openOverlay('dlg-score');
   $('btn-next').focus();
+}
+
+/* =====================================================================
+   Pause between calls
+   ===================================================================== */
+let pauseTimer = null;
+function pauseSim() {
+  if (!S.session || S.busy) return;
+  closeOverlay('dlg-score');
+  S.pausedAt = Date.now();
+  const tick = () => {
+    const mins = Math.floor((Date.now() - S.pausedAt) / 60000);
+    $('pause-info').textContent = `Paused at ${new Date(S.pausedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` +
+      (mins ? ` · ${mins} min ago` : '') + '. The next call will not start until you resume.';
+  };
+  tick();
+  clearInterval(pauseTimer);
+  pauseTimer = setInterval(tick, 30000);
+  openScreen('scr-paused');
+  server('logEvent', { sessionId: S.session.sessionId, text: `Paused after call ${S.index}` }).catch(() => {});
+}
+
+async function resumeSim() {
+  clearInterval(pauseTimer);
+  const mins = Math.max(1, Math.round((Date.now() - (S.pausedAt || Date.now())) / 60000));
+  closeScreen('scr-paused');
+  server('logEvent', { sessionId: S.session.sessionId, text: `Resumed after ${mins} min pause` }).catch(() => {});
+  await loadCurrentCall();
 }
 
 /* =====================================================================
