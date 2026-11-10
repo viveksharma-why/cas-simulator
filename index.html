@@ -900,7 +900,7 @@ function setRecDot(on) { $('rec-dot').classList.toggle('off', !on); }
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(',')[1]);
+    r.onload = () => { const str = String(r.result); resolve(str.slice(str.indexOf('base64,') + 7)); };
     r.onerror = () => reject(r.error);
     r.readAsDataURL(blob);
   });
