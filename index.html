@@ -813,7 +813,10 @@ function onCameraLost() {
 
 function pickMime() {
   if (!window.MediaRecorder) return '';
-  return ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+  const hasAudio = !!(Cam.stream && Cam.stream.getAudioTracks().length);
+  const list = hasAudio ? ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+                        : ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+  return list.find(t => MediaRecorder.isTypeSupported(t)) || '';
 }
 
 function startClip() {
@@ -826,7 +829,15 @@ function startClip() {
     Cam.rec.start(2000);
     setRecDot(true);
   } catch (err) {
-    noteEvent('Recording could not start: ' + err.message);
+    try { // Retry with the browser's default format
+      Cam.mime = '';
+      Cam.rec = new MediaRecorder(Cam.stream, { videoBitsPerSecond: VIDEO_BITRATE });
+      Cam.rec.ondataavailable = e => { if (e.data && e.data.size) Cam.chunks.push(e.data); };
+      Cam.rec.start(2000);
+      setRecDot(true);
+    } catch (err2) {
+      noteEvent('Recording could not start: ' + err2.message);
+    }
   }
 }
 
@@ -850,16 +861,23 @@ function discardClip() {
 
 async function uploadCurrentClip() {
   const blob = await stopClip();
-  if (!blob) return '';
+  if (!blob || !blob.size) { noteEvent(`Call ${S.index}: nothing was recorded`); return 'NOT RECORDED'; }
   if (blob.size > MAX_CLIP_BYTES) { noteEvent(`Call ${S.index} recording too large to upload`); return 'TOO LARGE'; }
-  try {
-    const data = await blobToBase64(blob);
-    const res = await server('uploadClip', { sessionId: S.session.sessionId, mime: blob.type, data });
-    return res.url;
-  } catch (err) {
-    noteEvent(`Call ${S.index} recording upload failed: ${err.message}`);
-    return 'UPLOAD FAILED';
+  const data = await blobToBase64(blob);
+  const mime = (blob.type || 'video/webm').split(';')[0];
+  let lastErr;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await server('uploadClip', { sessionId: S.session.sessionId, mime, data });
+      return res.url;
+    } catch (err) {
+      lastErr = err;
+      await new Promise(r => setTimeout(r, 1500));
+    }
   }
+  const msg = (lastErr && lastErr.message || 'unknown error').slice(0, 150);
+  noteEvent(`Call ${S.index} recording upload failed: ${msg}`);
+  return 'UPLOAD FAILED: ' + msg;
 }
 
 function snapshot() {
